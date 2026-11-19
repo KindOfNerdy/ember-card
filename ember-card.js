@@ -6,7 +6,7 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.1.1";
 const PLATFORM = "ember_mug";
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
 
@@ -23,8 +23,7 @@ const TEXT = {
     st_warm_no_control: "Warm",
     st_unknown: "Connecting …",
     asleep: "Asleep",
-    asleep_for: "Asleep for {when}",
-    last_battery: "Battery was at {value}",
+    as_of: "as of {when}",
     target: "Target {value}",
     keep_warm: "Keep warm",
     keep_warm_on: "Keep warm: on",
@@ -46,7 +45,11 @@ const TEXT = {
     error: "Could not change it: {msg}",
     ed_title: "Title",
     ed_devices: "Devices (empty = all)",
-    ed_hide_sleeping: "Hide devices that are asleep",
+    ed_show_sleeping: "Show devices that are asleep",
+    ed_compact_empty: "Empty devices as a short row",
+    ed_more: "More options",
+    ed_max_columns: "Columns at most",
+    ed_target_step: "Step for the target temperature",
     ed_hide: "Hide parts",
     ed_hide_picture: "Picture",
     ed_hide_level: "Fill level",
@@ -68,8 +71,7 @@ const TEXT = {
     st_warm_no_control: "Warm",
     st_unknown: "Verbinde …",
     asleep: "Schläft",
-    asleep_for: "Schläft seit {when}",
-    last_battery: "Akku zuletzt {value}",
+    as_of: "Stand {when}",
     target: "Ziel {value}",
     keep_warm: "Warmhalten",
     keep_warm_on: "Warmhalten: an",
@@ -91,7 +93,11 @@ const TEXT = {
     error: "Änderung fehlgeschlagen: {msg}",
     ed_title: "Titel",
     ed_devices: "Geräte (leer = alle)",
-    ed_hide_sleeping: "Schlafende Geräte ausblenden",
+    ed_show_sleeping: "Schlafende Geräte zeigen",
+    ed_compact_empty: "Leere Geräte als schmale Zeile",
+    ed_more: "Weitere Einstellungen",
+    ed_max_columns: "Höchstens so viele Spalten",
+    ed_target_step: "Schrittweite der Zieltemperatur",
     ed_hide: "Teile ausblenden",
     ed_hide_picture: "Bild",
     ed_hide_level: "Füllstand",
@@ -169,6 +175,7 @@ class EmberCard extends HTMLElement {
     this._pending = {}; // deviceId → { target, at } and `${id}:led` → { rgb, at }
     this._timers = {};
     this._error = "";
+    this._lastBattery = {}; // deviceId → last battery level before it fell asleep (null = none found)
 
     this.shadowRoot.addEventListener("click", (e) => {
       const el = e.target.closest("[data-act]");
@@ -207,12 +214,23 @@ class EmberCard extends HTMLElement {
       schema: [
         { name: "title", selector: { text: {} } },
         { name: "devices", selector: { device: { multiple: true, filter: { integration: PLATFORM } } } },
-        { name: "hide_sleeping", default: false, selector: { boolean: {} } },
+        { name: "show_sleeping", default: true, selector: { boolean: {} } },
+        { name: "compact_empty", default: false, selector: { boolean: {} } },
         {
           name: "hide",
           selector: {
             select: { multiple: true, mode: "list", options: PARTS.map((p) => ({ value: p, label: uiText(`ed_hide_${p}`) })) },
           },
+        },
+        {
+          type: "expandable",
+          name: "more",
+          title: uiText("ed_more"),
+          flatten: true,
+          schema: [
+            { name: "max_columns", default: 3, selector: { number: { min: 1, max: 3, mode: "box" } } },
+            { name: "target_step", selector: { number: { min: 0.1, max: 5, step: 0.1, mode: "box" } } },
+          ],
         },
       ],
       computeLabel: (schema) => uiText(`ed_${schema.name}`),
@@ -233,8 +251,11 @@ class EmberCard extends HTMLElement {
 
   setConfig(config) {
     this._config = {
-      hide_sleeping: false,
+      compact_empty: false,
       ...config,
+      // hide_sleeping is the name from 0.1.x
+      show_sleeping: config.show_sleeping ?? !config.hide_sleeping,
+      max_columns: Math.min(3, Math.max(1, Number(config.max_columns) || 3)),
       devices: [].concat(config.devices || config.device_id || []),
       hide: [].concat(config.hide || []),
     };
@@ -245,15 +266,6 @@ class EmberCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._update();
-  }
-
-  connectedCallback() {
-    // keeps "asleep for 5 min" current
-    this._ticker = setInterval(() => this._refresh(), 60000);
-  }
-
-  disconnectedCallback() {
-    clearInterval(this._ticker);
   }
 
   _refresh() {
@@ -302,24 +314,50 @@ class EmberCard extends HTMLElement {
     return !!st && st.state !== "unavailable";
   }
 
-  // ---- last known battery (per browser, only for the asleep row) ------------
+  // ---- last battery level of a device that is asleep ------------------------
+  // Asleep, the integration reports every entity as unavailable; the last level
+  // before that comes from the recorder, once per sleep.
 
-  _remember(dev) {
-    const bat = this._st(dev, "battery_percent");
-    if (!bat || OFF.includes(bat.state)) return;
+  async _fetchLastBattery(dev) {
+    const id = dev.e.battery_percent;
+    if (!id || dev.id in this._lastBattery) return;
+    this._lastBattery[dev.id] = null;
     try {
-      localStorage.setItem(`ember-card:${dev.id}`, JSON.stringify({ battery: Number(bat.state) }));
+      const start = new Date(Date.now() - 30 * 86400000).toISOString();
+      const res = await this._hass.callWS({
+        type: "history/history_during_period",
+        start_time: start,
+        entity_ids: [id],
+        minimal_response: true,
+        no_attributes: true,
+        significant_changes_only: false,
+      });
+      const rows = res?.[id] || [];
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const v = Number(rows[i].s ?? rows[i].state);
+        if (rows[i].s !== "unavailable" && Number.isFinite(v)) {
+          const t = rows[i].lu ?? rows[i].last_updated;
+          this._lastBattery[dev.id] = { value: v, at: typeof t === "number" ? t * 1000 : Date.parse(t) };
+          break;
+        }
+      }
+      // Asleep for longer than the recorder keeps its history: take the last
+      // hour of the long-term statistics instead.
+      if (this._lastBattery[dev.id] == null) {
+        const stats = await this._hass.callWS({
+          type: "recorder/statistics_during_period",
+          start_time: new Date(Date.now() - 365 * 86400000).toISOString(),
+          statistic_ids: [id],
+          period: "hour",
+          types: ["mean"],
+        });
+        const last = (stats?.[id] || []).at(-1);
+        if (Number.isFinite(last?.mean)) this._lastBattery[dev.id] = { value: last.mean, at: last.end };
+      }
     } catch (_) {
-      /* storage blocked: the asleep row simply shows less */
+      /* no history (recorder off or no access): the row just says asleep */
     }
-  }
-
-  _recall(dev) {
-    try {
-      return JSON.parse(localStorage.getItem(`ember-card:${dev.id}`) || "{}");
-    } catch (_) {
-      return {};
-    }
+    this._refresh();
   }
 
   // ---- actions ---------------------------------------------------------------
@@ -342,7 +380,8 @@ class EmberCard extends HTMLElement {
   _limits(dev) {
     const a = this._st(dev, "target_temp")?.attributes || {};
     const fahrenheit = String(a.unit_of_measurement || "").includes("F");
-    const step = Number(a.step) > 0 && Number(a.step) < 1 ? Number(a.step) : fahrenheit ? 1 : 0.5;
+    const own = Number(this._config.target_step);
+    const step = own > 0 ? own : Number(a.step) > 0 && Number(a.step) < 1 ? Number(a.step) : fahrenheit ? 1 : 0.5;
     return { min: Number(a.min ?? 48.8), max: Number(a.max ?? 63), step, unit: a.unit_of_measurement || "°C" };
   }
 
@@ -406,20 +445,28 @@ class EmberCard extends HTMLElement {
     if (sig === this._sig) return;
     this._sig = sig;
 
-    devices.forEach((d) => this._awake(d) && this._remember(d));
-    const shown = devices.filter((d) => !this._config.hide_sleeping || this._awake(d));
-    // awake devices first, the asleep ones as short rows below
-    shown.sort((a, b) => this._awake(b) - this._awake(a));
-    this._lastCount = shown.length;
+    const show = this._config.show_sleeping;
+    for (const d of devices) {
+      if (this._awake(d)) delete this._lastBattery[d.id];
+      else if (show && this._shows("battery")) this._fetchLastBattery(d);
+    }
+    // In use: full panels. Resting (asleep, or empty if wished): one quiet panel of short rows.
+    const compact = (d) => this._config.compact_empty && this._st(d, "state")?.state === "empty";
+    const active = devices.filter((d) => this._awake(d) && !compact(d));
+    const resting = devices.filter((d) => (this._awake(d) ? compact(d) : show));
+    resting.sort((a, b) => this._awake(b) - this._awake(a));
+    this._lastCount = active.length + Math.ceil(resting.length / 3);
+    const shown = active.length + resting.length;
 
-    let body;
+    let body = "";
     if (!devices.length) body = `<div class="note">${this._t("no_device")}</div>`;
-    else body = `<div class="list">${shown.map((d) => (this._awake(d) ? this._renderAwake(d) : this._renderAsleep(d))).join("")}</div>`;
+    if (active.length) body += `<div class="list cols-${this._config.max_columns}">${active.map((d) => this._renderAwake(d)).join("")}</div>`;
+    if (resting.length) body += `<div class="rest">${resting.map((d) => this._renderRow(d)).join("")}</div>`;
 
     const title = this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : "";
     const err = this._error ? `<div class="msg" role="alert">${esc(this._error)}</div>` : "";
     this.shadowRoot.innerHTML = `<style>${this._css()}</style>
-      <ha-card class="${devices.length && !shown.length ? "hidden" : ""}">${title}${body}${err}</ha-card>`;
+      <ha-card class="${devices.length && !shown ? "hidden" : ""}">${title}${body}${err}</ha-card>`;
   }
 
   _num(st) {
@@ -429,15 +476,6 @@ class EmberCard extends HTMLElement {
   _fmtTemp(v, unit) {
     if (v == null) return "–";
     return `${new Intl.NumberFormat(this._hass.language, { maximumFractionDigits: 1 }).format(v)} ${unit}`;
-  }
-
-  // "2 Std." / "2 hr" since a timestamp
-  _since(iso) {
-    const ms = Date.now() - new Date(iso).getTime();
-    if (!Number.isFinite(ms)) return "";
-    const min = Math.max(1, Math.round(ms / 60000));
-    const [v, unit] = min < 60 ? [min, "minute"] : min < 2880 ? [Math.round(min / 60), "hour"] : [Math.round(min / 1440), "day"];
-    return new Intl.NumberFormat(this._hass.language, { style: "unit", unit, unitDisplay: "short" }).format(v);
   }
 
   _batIcon(v, charging) {
@@ -454,24 +492,52 @@ class EmberCard extends HTMLElement {
     return `<div class="pic ${asleep ? "asleep" : ""}">${this._mugSvg(dev, asleep ? 0 : level, asleep ? null : rgb)}</div>`;
   }
 
-  _renderAsleep(dev) {
-    const st = this._st(dev, "state");
-    const last = this._recall(dev);
-    const status = st?.last_changed ? this._t("asleep_for", { when: this._since(st.last_changed) }) : this._t("asleep");
-    const sub =
-      this._shows("battery") && Number.isFinite(last.battery)
-        ? `<div class="sub">${this._t("last_battery", { value: `${Math.round(last.battery)} %` })}</div>`
-        : "";
+  // "Stand 16:39" / "Stand 21.02." / "Stand 21.02.2025"
+  _asOf(ms) {
+    const at = new Date(ms);
+    const now = new Date();
+    const opts =
+      at.toDateString() === now.toDateString()
+        ? { hour: "2-digit", minute: "2-digit" }
+        : at.getFullYear() === now.getFullYear()
+          ? { day: "2-digit", month: "2-digit" }
+          : { day: "2-digit", month: "2-digit", year: "numeric" };
+    return this._t("as_of", { when: new Intl.DateTimeFormat(this._hass.language, opts).format(at) });
+  }
+
+  // A resting device: asleep, or awake but empty (with compact_empty).
+  _renderRow(dev) {
+    const awake = this._awake(dev);
+    let battery = "";
+    if (this._shows("battery")) {
+      if (awake) {
+        const bat = this._st(dev, "battery_percent");
+        const v = this._num(bat);
+        const charging = bat?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on";
+        if (bat && v != null) {
+          battery = `<button class="bat" data-act="more" data-entity="${bat.entity_id}" aria-label="${this._t(charging ? "charging" : "battery")}: ${Math.round(v)} %">
+            <span class="bat-v"><ha-icon icon="${this._batIcon(v, charging)}"></ha-icon>${Math.round(v)} %</span>
+            ${charging ? `<span class="bat-t">${this._t("charging")}</span>` : ""}</button>`;
+        }
+      } else {
+        const last = this._lastBattery[dev.id];
+        if (Number.isFinite(last?.value)) {
+          // the battery drains while asleep, so the value always says when it was read
+          battery = `<div class="bat">
+            <span class="bat-v"><ha-icon icon="${this._batIcon(last.value, false)}"></ha-icon>${Math.round(last.value)} %</span>
+            ${Number.isFinite(last.at) ? `<span class="bat-t">${this._asOf(last.at)}</span>` : ""}</div>`;
+        }
+      }
+    }
+    const status = awake ? this._t("st_empty") : this._t("asleep");
     return `
-      <div class="dev asleep">
-        <div class="head">
-          ${this._pic(dev, 0, null, true)}
-          <div class="text">
-            <div class="name">${esc(dev.name)}</div>
-            <div class="status quiet">${esc(status)}</div>
-            ${sub}
-          </div>
+      <div class="row ${awake ? "" : "asleep"}">
+        ${this._pic(dev, 0, null, !awake)}
+        <div class="text">
+          <div class="r-name">${esc(dev.name)}</div>
+          <div class="sub">${status}</div>
         </div>
+        ${battery}
       </div>`;
   }
 
@@ -595,15 +661,30 @@ class EmberCard extends HTMLElement {
       .title { font-size: 16px; font-weight: 500; margin: 2px 2px 10px; }
       .note { color: var(--secondary-text-color); padding: 4px; }
       .list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
-      @container (min-width: 620px) { .list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-      @container (min-width: 960px) { .list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+      @container (min-width: 620px) { .list:not(.cols-1) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @container (min-width: 960px) { .list.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+      /* resting devices: one quiet panel, a short row each */
+      .rest { padding: 2px 12px; border-radius: var(--ha-card-border-radius, 12px); background: var(--secondary-background-color); }
+      .list + .rest { margin-top: 10px; }
+      .row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 12px; align-items: center; padding: 8px 0; }
+      .row + .row { border-top: 1px solid var(--divider-color); }
+      .row .pic, .row .icon { width: 28px; }
+      .row .icon { --mdc-icon-size: 22px; }
+      .r-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .bat { all: unset; display: flex; flex-direction: column; align-items: flex-end; font-size: 13px; color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums; }
+      button.bat { cursor: pointer; padding: 2px 6px; margin-right: -6px; border-radius: 8px; }
+      button.bat:hover { background: var(--card-background-color); }
+      .bat-v { display: inline-flex; align-items: center; gap: 2px; color: var(--primary-text-color); }
+      .bat-v ha-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); }
+      .bat-t { font-size: 12px; }
 
       .dev { padding: 10px 12px; border-radius: var(--ha-card-border-radius, 12px); background: var(--secondary-background-color); }
       .head { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; column-gap: 14px; align-items: center; }
       .text { display: flex; flex-direction: column; min-width: 0; }
       .name { font-size: 14px; color: var(--secondary-text-color); line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .status { font-size: 22px; line-height: 1.2; font-weight: 600; font-variant-numeric: tabular-nums; }
-      .status.quiet { font-size: 16px; font-weight: 500; color: var(--secondary-text-color); }
       .sub { font-size: 12px; color: var(--secondary-text-color); }
       .icon { --mdc-icon-size: 40px; color: var(--secondary-text-color); display: flex; justify-content: center; }
       .bar { grid-column: 1 / -1; margin-top: 8px; height: 6px; border-radius: 3px; background: var(--divider-color); overflow: hidden; }

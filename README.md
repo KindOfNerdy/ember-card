@@ -11,7 +11,7 @@ A Lovelace card for Ember mugs, cups, tumblers and travel mugs set up with the [
 - **Presets:** a drop-down with the presets you set up in the integration. If the target matches none of them, it says "Custom".
 - **Battery:** level and whether it is charging; tap it for the history.
 - **LED:** the current color; tap it to pick a new one.
-- **Asleep:** an Ember only reports while it is awake. A device that is asleep gets a short row with how long it has been asleep and its last battery level, or it is left out with `hide_sleeping`.
+- **Asleep:** an Ember only reports while it is awake. Devices that are asleep are listed together below the others, one short row each, with the last battery level and when it was read (from the recorder, so it shows on every device). Leave them out with `show_sleeping: false`.
 
 Target and presets are only shown while keep warm is on. On a wide card the devices sit next to each other.
 
@@ -50,8 +50,11 @@ type: custom:ember-card
 |---|---|---|
 | `title` | – | Title above the devices |
 | `devices` | all | Devices to show, in this order (device IDs; the visual editor lets you pick them) |
-| `hide_sleeping` | `false` | Leave out devices that are asleep instead of showing a short row |
+| `show_sleeping` | `true` | Show devices that are asleep as short rows; `false` leaves them out |
+| `compact_empty` | `false` | Show devices that are awake but empty (e.g. on the coaster) as a short row too, without controls |
 | `hide` | – | Parts to hide: `picture`, `level`, `keep_warm`, `target`, `presets`, `battery`, `led` |
+| `max_columns` | `3` | Columns at most on a wide card; `1` keeps the devices below each other |
+| `target_step` | `0.5` (°C), `1` (°F) | Step of the minus and plus buttons for the target temperature |
 
 For example, one card per device without the LED button:
 
