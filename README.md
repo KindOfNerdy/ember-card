@@ -9,7 +9,7 @@ A Lovelace card for Ember mugs, cups, tumblers and travel mugs set up with the [
 - **Header:** a picture of the device (mug, cup, tumbler or travel mug) filled to its current level, the name, the current temperature and the state (heating up, perfect, cooling down, warm …), the fill level as a bar and a round button to switch keeping warm on or off.
 - **Target temperature:** minus and plus within the limits of the device. Several taps are sent as one change, so the mug does not get a Bluetooth write for every step.
 - **Presets:** a drop-down with the presets you set up in the integration. If the target matches none of them, it says "Custom".
-- **Battery:** level and whether it is charging; tap it for the history.
+- **Battery:** level and whether it is charging; tap it for the history. A badge on the picture shows when it charges (green), runs low at 20 % (orange) or is almost empty at 10 % (red), also on asleep devices.
 - **LED:** the current color; tap it to pick a new one.
 - **Asleep:** an Ember only reports while it is awake. Devices that are asleep are listed together below the others, one short row each, with the last battery level and when it was read (from the recorder, so it shows on every device). Leave them out with `show_sleeping: false`.
 

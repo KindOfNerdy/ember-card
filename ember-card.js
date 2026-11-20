@@ -6,7 +6,7 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.1.1";
+const CARD_VERSION = "0.1.2";
 const PLATFORM = "ember_mug";
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
 
@@ -111,6 +111,10 @@ const TEXT = {
 
 const OFF = ["unavailable", "unknown", undefined, null, ""];
 // Status → theme color (HA defines these variables in every theme).
+// Battery levels that ask for the coaster (percent).
+const BAT_LOW = 20;
+const BAT_CRIT = 10;
+
 const STATE_COLOR = {
   heating: "var(--state-climate-heat-color, var(--orange-color))",
   cooling: "var(--state-climate-cool-color, var(--blue-color))",
@@ -478,18 +482,33 @@ class EmberCard extends HTMLElement {
     return `${new Intl.NumberFormat(this._hass.language, { maximumFractionDigits: 1 }).format(v)} ${unit}`;
   }
 
+  // "charging" while it charges (until full), "crit"/"low" when it needs the coaster, else "".
+  _batState(v, charging) {
+    if (v == null) return "";
+    if (charging) return v < 100 ? "charging" : "";
+    return v <= BAT_CRIT ? "crit" : v <= BAT_LOW ? "low" : "";
+  }
+
+  // Badge on the mug picture: charging, low, almost empty.
+  _batBadge(state) {
+    const icon = { charging: "mdi:lightning-bolt", low: "mdi:battery-low", crit: "mdi:battery-alert-variant" }[state];
+    return icon ? `<span class="badge bat-${state}"><ha-icon icon="${icon}"></ha-icon></span>` : "";
+  }
+
   _batIcon(v, charging) {
     if (v == null) return "mdi:battery-unknown";
+    if (!charging && v <= BAT_CRIT) return "mdi:battery-alert-variant";
     const step = Math.min(100, Math.max(10, Math.round(v / 10) * 10));
     if (charging) return `mdi:battery-charging-${step}`;
     return step === 100 ? "mdi:battery" : `mdi:battery-${step}`;
   }
 
-  _pic(dev, level, rgb, asleep) {
+  _pic(dev, level, rgb, asleep, batState = "") {
+    const badge = this._shows("battery") ? this._batBadge(batState) : "";
     if (!this._shows("picture")) {
-      return `<div class="icon"><ha-icon icon="${asleep ? "mdi:sleep" : "mdi:coffee-outline"}"></ha-icon></div>`;
+      return `<div class="icon"><ha-icon icon="${asleep ? "mdi:sleep" : "mdi:coffee-outline"}"></ha-icon>${badge}</div>`;
     }
-    return `<div class="pic ${asleep ? "asleep" : ""}">${this._mugSvg(dev, asleep ? 0 : level, asleep ? null : rgb)}</div>`;
+    return `<div class="pic ${asleep ? "asleep" : ""}">${this._mugSvg(dev, asleep ? 0 : level, asleep ? null : rgb)}${badge}</div>`;
   }
 
   // "Stand 16:39" / "Stand 21.02." / "Stand 21.02.2025"
@@ -515,24 +534,29 @@ class EmberCard extends HTMLElement {
         const v = this._num(bat);
         const charging = bat?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on";
         if (bat && v != null) {
-          battery = `<button class="bat" data-act="more" data-entity="${bat.entity_id}" aria-label="${this._t(charging ? "charging" : "battery")}: ${Math.round(v)} %">
+          const bs = this._batState(v, charging);
+          battery = `<button class="bat bat-${bs}" data-act="more" data-entity="${bat.entity_id}" aria-label="${this._t(charging ? "charging" : "battery")}: ${Math.round(v)} %">
             <span class="bat-v"><ha-icon icon="${this._batIcon(v, charging)}"></ha-icon>${Math.round(v)} %</span>
-            ${charging ? `<span class="bat-t">${this._t("charging")}</span>` : ""}</button>`;
+            </button>`;
         }
       } else {
         const last = this._lastBattery[dev.id];
         if (Number.isFinite(last?.value)) {
           // the battery drains while asleep, so the value always says when it was read
-          battery = `<div class="bat">
+          battery = `<div class="bat bat-${this._batState(last.value, false)}">
             <span class="bat-v"><ha-icon icon="${this._batIcon(last.value, false)}"></ha-icon>${Math.round(last.value)} %</span>
             ${Number.isFinite(last.at) ? `<span class="bat-t">${this._asOf(last.at)}</span>` : ""}</div>`;
         }
       }
     }
     const status = awake ? this._t("st_empty") : this._t("asleep");
+    const rowBat = awake ? this._st(dev, "battery_percent") : null;
+    const rowState = awake
+      ? this._batState(this._num(rowBat), rowBat?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on")
+      : this._batState(this._lastBattery[dev.id]?.value, false);
     return `
       <div class="row ${awake ? "" : "asleep"}">
-        ${this._pic(dev, 0, null, !awake)}
+        ${this._pic(dev, 0, null, !awake, rowState)}
         <div class="text">
           <div class="r-name">${esc(dev.name)}</div>
           <div class="sub">${status}</div>
@@ -566,6 +590,8 @@ class EmberCard extends HTMLElement {
     const subParts = [];
     if (!empty && temp != null) subParts.push(`<span style="color:${color}">${esc(statusText)}</span>`);
     if (ctrlOn && target != null && !this._shows("target")) subParts.push(esc(this._t("target", { value: this._fmtTemp(target, lim.unit) })));
+    // charging / low / almost empty shows as a badge on the mug and a coloured chip
+    const batState = this._shows("battery") ? this._batState(batVal, charging) : "";
     const power =
       ctrl && this._shows("keep_warm")
         ? `<button class="power ${ctrlOn ? "on" : ""}" data-act="toggle" data-entity="${ctrl.entity_id}"
@@ -579,7 +605,7 @@ class EmberCard extends HTMLElement {
         : "";
     const head = `
       <div class="head">
-        ${this._pic(dev, level, rgb, false)}
+        ${this._pic(dev, level, rgb, false, batState)}
         <div class="text">
           <div class="name">${esc(dev.name)}</div>
           <div class="status">${esc(big)}</div>
@@ -618,9 +644,11 @@ class EmberCard extends HTMLElement {
     // small things: battery and LED color
     const battery =
       bat && this._shows("battery")
-        ? `<button class="btn small" data-act="more" data-entity="${bat.entity_id}"
+        ? `<button class="btn small bat-${batState}" data-act="more" data-entity="${bat.entity_id}"
              aria-label="${this._t(charging ? "charging" : "battery")}: ${batVal == null ? "–" : Math.round(batVal)} %">
-             <ha-icon icon="${this._batIcon(batVal, charging)}"></ha-icon>${batVal == null ? "–" : Math.round(batVal)} %</button>`
+             <ha-icon icon="${this._batIcon(batVal, charging)}"></ha-icon>${
+               batVal == null ? "–" : `${Math.round(batVal)} %`
+             }</button>`
         : "";
     const ledPick =
       led && this._shows("led") && !OFF.includes(led.state)
@@ -679,6 +707,21 @@ class EmberCard extends HTMLElement {
       .bat-v { display: inline-flex; align-items: center; gap: 2px; color: var(--primary-text-color); }
       .bat-v ha-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); }
       .bat-t { font-size: 12px; }
+      /* battery: the badge on the mug is the one loud signal; chips and rows only colour their icon */
+      .bat-low ha-icon { color: var(--warning-color) !important; }
+      .bat-crit ha-icon { color: var(--error-color) !important; }
+      .bat-charging ha-icon { color: var(--success-color) !important; }
+      .pic, .icon { position: relative; }
+      .badge { position: absolute; top: -5px; right: -7px; width: 24px; height: 24px; border-radius: 50%; display: flex;
+        align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--secondary-background-color); }
+      .badge ha-icon { --mdc-icon-size: 16px; color: var(--text-primary-color) !important; }
+      .badge.bat-low { background: var(--warning-color); }
+      .badge.bat-crit { background: var(--error-color); }
+      .badge.bat-charging { background: var(--success-color); animation: bat-pulse 2.4s ease-in-out infinite; }
+      .row .badge { width: 16px; height: 16px; top: -5px; right: -3px; }
+      .row .badge ha-icon { --mdc-icon-size: 11px; }
+      @keyframes bat-pulse { 50% { opacity: .55; } }
+      @media (prefers-reduced-motion: reduce) { .badge.bat-charging { animation: none; } }
 
       .dev { padding: 10px 12px; border-radius: var(--ha-card-border-radius, 12px); background: var(--secondary-background-color); }
       .head { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; column-gap: 14px; align-items: center; }
