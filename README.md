@@ -15,6 +15,10 @@ A Lovelace card for Ember mugs, cups, tumblers and travel mugs set up with the [
 
 Target and presets are only shown while keep warm is on. On a wide card the devices sit next to each other.
 
+**Row (`mode: row`):** one tile-sized row per device that is awake, for a "what's running" section: picture with the battery badge, name, temperature → target and state, a thin fill-level bar and the keep warm button. Devices that are asleep are left out; when all are asleep, the card takes no room. Tapping the row opens the more-info dialog, or runs your own `tap_action`.
+
+<img src="docs/screenshot-row.png" alt="Rows for three mugs in use: one keeping coffee warm, one heating up, a cup without keep warm" width="560">
+
 ## Requirements
 
 - Home Assistant with the [Ember Mug integration](https://github.com/sopelj/hass-ember-mug-component).
@@ -48,6 +52,7 @@ type: custom:ember-card
 
 | Option | Default | Description |
 |---|---|---|
+| `mode` | `full` | `full` or `row` (one row per device in use, see above) |
 | `title` | – | Title above the devices |
 | `devices` | all | Devices to show, in this order (device IDs; the visual editor lets you pick them) |
 | `show_sleeping` | `true` | Show devices that are asleep as short rows; `false` leaves them out |
@@ -55,6 +60,7 @@ type: custom:ember-card
 | `hide` | – | Parts to hide: `picture`, `level`, `keep_warm`, `target`, `presets`, `battery`, `led` |
 | `max_columns` | `3` | Columns at most on a wide card; `1` keeps the devices below each other |
 | `target_step` | `0.5` (°C), `1` (°F) | Step of the minus and plus buttons for the target temperature |
+| `tap_action`, `hold_action` | more-info, – | Row only: what tapping or holding the row does (standard Home Assistant actions) |
 
 For example, one card per device without the LED button:
 
@@ -62,6 +68,16 @@ For example, one card per device without the LED button:
 type: custom:ember-card
 devices: [<device id>]
 hide: [led]
+```
+
+A row per mug in use that opens a pop-up:
+
+```yaml
+type: custom:ember-card
+mode: row
+tap_action:
+  action: navigate
+  navigation_path: "#ember"
 ```
 
 ## Thanks

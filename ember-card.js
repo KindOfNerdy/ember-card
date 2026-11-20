@@ -6,8 +6,9 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.1.2";
+const CARD_VERSION = "0.2.0";
 const PLATFORM = "ember_mug";
+const MODES = ["full", "row"];
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
 
 const TEXT = {
@@ -44,6 +45,11 @@ const TEXT = {
     "p_green-tea": "Green tea",
     error: "Could not change it: {msg}",
     ed_title: "Title",
+    ed_mode: "Display",
+    mode_full: "Full card",
+    mode_row: "Row (one per mug in use)",
+    ed_tap_action: "Tap action (row)",
+    ed_hold_action: "Hold action (row)",
     ed_devices: "Devices (empty = all)",
     ed_show_sleeping: "Show devices that are asleep",
     ed_compact_empty: "Empty devices as a short row",
@@ -92,6 +98,11 @@ const TEXT = {
     "p_green-tea": "Grüntee",
     error: "Änderung fehlgeschlagen: {msg}",
     ed_title: "Titel",
+    ed_mode: "Darstellung",
+    mode_full: "Volle Karte",
+    mode_row: "Zeile (eine je benutztem Becher)",
+    ed_tap_action: "Aktion beim Antippen (Zeile)",
+    ed_hold_action: "Aktion beim Halten (Zeile)",
     ed_devices: "Geräte (leer = alle)",
     ed_show_sleeping: "Schlafende Geräte zeigen",
     ed_compact_empty: "Leere Geräte als schmale Zeile",
@@ -183,7 +194,13 @@ class EmberCard extends HTMLElement {
 
     this.shadowRoot.addEventListener("click", (e) => {
       const el = e.target.closest("[data-act]");
-      if (!el || el.disabled) return;
+      if (!el) {
+        const tile = e.target.closest("[data-tap]");
+        if (tile && !this._held) this._action(tile.dataset.tap, "tap");
+        this._held = false;
+        return;
+      }
+      if (el.disabled) return;
       const { act, entity, dev } = el.dataset;
       if (act === "step") this._step(dev, Number(el.dataset.dir));
       if (act === "toggle") this._call("switch", "toggle", entity);
@@ -201,6 +218,27 @@ class EmberCard extends HTMLElement {
         this._refresh();
       }
     });
+    // row: hold action after half a second, Enter/Space as tap
+    this.shadowRoot.addEventListener("pointerdown", (e) => {
+      const tile = e.target.closest("[data-tap]");
+      if (!tile || e.target.closest("[data-act]") || !this._config.hold_action) return;
+      this._held = false;
+      clearTimeout(this._holdTimer);
+      this._holdTimer = setTimeout(() => {
+        this._held = true;
+        this._action(tile.dataset.tap, "hold");
+      }, 500);
+    });
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
+      this.shadowRoot.addEventListener(ev, () => clearTimeout(this._holdTimer), true);
+    }
+    this.shadowRoot.addEventListener("keydown", (e) => {
+      const tile = e.target.matches?.("[data-tap]") ? e.target : null;
+      if (tile && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
+        this._action(tile.dataset.tap, "tap");
+      }
+    });
     // keep the card still while a drop-down or the color picker is open
     this.shadowRoot.addEventListener("focusin", (e) => {
       if (e.target.matches?.("select, input")) this._hold = true;
@@ -216,6 +254,11 @@ class EmberCard extends HTMLElement {
   static getConfigForm() {
     return {
       schema: [
+        {
+          name: "mode",
+          default: "full",
+          selector: { select: { mode: "dropdown", options: MODES.map((m) => ({ value: m, label: uiText(`mode_${m}`) })) } },
+        },
         { name: "title", selector: { text: {} } },
         { name: "devices", selector: { device: { multiple: true, filter: { integration: PLATFORM } } } },
         { name: "show_sleeping", default: true, selector: { boolean: {} } },
@@ -234,6 +277,8 @@ class EmberCard extends HTMLElement {
           schema: [
             { name: "max_columns", default: 3, selector: { number: { min: 1, max: 3, mode: "box" } } },
             { name: "target_step", selector: { number: { min: 0.1, max: 5, step: 0.1, mode: "box" } } },
+            { name: "tap_action", selector: { ui_action: {} } },
+            { name: "hold_action", selector: { ui_action: {} } },
           ],
         },
       ],
@@ -246,17 +291,26 @@ class EmberCard extends HTMLElement {
   }
 
   getCardSize() {
+    if (this._row) return Math.max(1, this._lastCount || 1);
     return 3 * Math.max(1, this._lastCount || 1);
   }
 
+  // Row: one grid row per mug in use ("auto", so two mugs in use get two rows).
   getGridOptions() {
+    if (this._row) return { rows: "auto", columns: 12, min_columns: 6 };
     return { columns: 12, min_columns: 4 };
   }
 
+  get _row() {
+    return this._config?.mode === "row";
+  }
+
   setConfig(config) {
+    if (config.mode && !MODES.includes(config.mode)) throw new Error(`mode must be ${MODES.join(" or ")}`);
     this._config = {
       compact_empty: false,
       ...config,
+      mode: config.mode || "full",
       // hide_sleeping is the name from 0.1.x
       show_sleeping: config.show_sleeping ?? !config.hide_sleeping,
       max_columns: Math.min(3, Math.max(1, Number(config.max_columns) || 3)),
@@ -311,6 +365,13 @@ class EmberCard extends HTMLElement {
   _st(dev, key) {
     const id = dev.e[key];
     return id ? this._hass.states[id] : undefined;
+  }
+
+  // Battery entity, level and whether it charges (on the coaster).
+  _battery(dev) {
+    const st = this._st(dev, "battery_percent");
+    const charging = st?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on";
+    return { st, v: this._num(st), charging };
   }
 
   _awake(dev) {
@@ -375,6 +436,12 @@ class EmberCard extends HTMLElement {
       this._error = this._t("error", { msg: err?.message || err });
       this._refresh();
     }
+  }
+
+  // Row tap/hold: HA runs the action (more-info by default, navigate, perform-action …).
+  _action(entity, kind) {
+    const config = { entity, tap_action: { action: "more-info" }, ...this._config };
+    this.dispatchEvent(new CustomEvent("hass-action", { detail: { config, action: kind }, bubbles: true, composed: true }));
   }
 
   _moreInfo(entityId) {
@@ -448,6 +515,9 @@ class EmberCard extends HTMLElement {
     ]);
     if (sig === this._sig) return;
     this._sig = sig;
+
+    if (this._row) return this._renderTiles(devices);
+    this.removeAttribute("hidden");
 
     const show = this._config.show_sleeping;
     for (const d of devices) {
@@ -530,9 +600,7 @@ class EmberCard extends HTMLElement {
     let battery = "";
     if (this._shows("battery")) {
       if (awake) {
-        const bat = this._st(dev, "battery_percent");
-        const v = this._num(bat);
-        const charging = bat?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on";
+        const { st: bat, v, charging } = this._battery(dev);
         if (bat && v != null) {
           const bs = this._batState(v, charging);
           battery = `<button class="bat bat-${bs}" data-act="more" data-entity="${bat.entity_id}" aria-label="${this._t(charging ? "charging" : "battery")}: ${Math.round(v)} %">
@@ -550,10 +618,8 @@ class EmberCard extends HTMLElement {
       }
     }
     const status = awake ? this._t("st_empty") : this._t("asleep");
-    const rowBat = awake ? this._st(dev, "battery_percent") : null;
-    const rowState = awake
-      ? this._batState(this._num(rowBat), rowBat?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on")
-      : this._batState(this._lastBattery[dev.id]?.value, false);
+    const b = this._battery(dev);
+    const rowState = awake ? this._batState(b.v, b.charging) : this._batState(this._lastBattery[dev.id]?.value, false);
     return `
       <div class="row ${awake ? "" : "asleep"}">
         ${this._pic(dev, 0, null, !awake, rowState)}
@@ -571,9 +637,7 @@ class EmberCard extends HTMLElement {
     const curSt = this._st(dev, "current_temp");
     const temp = this._num(curSt);
     const level = this._num(this._st(dev, "liquid_level"));
-    const bat = this._st(dev, "battery_percent");
-    const batVal = this._num(bat);
-    const charging = bat?.attributes?.battery_charging === true || this._st(dev, "power")?.state === "on";
+    const { st: bat, v: batVal, charging } = this._battery(dev);
     const ctrl = this._st(dev, "temperature_control");
     const ctrlOn = ctrl?.state === "on";
     const lim = this._limits(dev);
@@ -592,17 +656,8 @@ class EmberCard extends HTMLElement {
     if (ctrlOn && target != null && !this._shows("target")) subParts.push(esc(this._t("target", { value: this._fmtTemp(target, lim.unit) })));
     // charging / low / almost empty shows as a badge on the mug and a coloured chip
     const batState = this._shows("battery") ? this._batState(batVal, charging) : "";
-    const power =
-      ctrl && this._shows("keep_warm")
-        ? `<button class="power ${ctrlOn ? "on" : ""}" data-act="toggle" data-entity="${ctrl.entity_id}"
-             role="switch" aria-checked="${ctrlOn}" title="${this._t(ctrlOn ? "keep_warm_on" : "keep_warm_off")}"
-             aria-label="${this._t("keep_warm")}"><ha-icon icon="mdi:${ctrlOn ? "fire" : "fire-off"}"></ha-icon></button>`
-        : "";
-    const bar =
-      this._shows("level") && level != null
-        ? `<div class="bar" role="progressbar" aria-label="${this._t("level")}" aria-valuenow="${Math.round(level)}" aria-valuemin="0" aria-valuemax="100">
-             <div style="width:${Math.max(0, Math.min(100, level))}%"></div></div>`
-        : "";
+    const power = this._powerBtn(ctrl);
+    const bar = this._levelBar(level);
     const head = `
       <div class="head">
         ${this._pic(dev, level, rgb, false, batState)}
@@ -661,6 +716,66 @@ class EmberCard extends HTMLElement {
     const extras = battery || ledPick ? `<div class="extras">${battery}${ledPick}</div>` : "";
 
     return `<div class="dev">${head}${controls}${extras}</div>`;
+  }
+
+  // Keep warm as the round button (full card and row).
+  _powerBtn(ctrl) {
+    if (!ctrl || !this._shows("keep_warm")) return "";
+    const on = ctrl.state === "on";
+    return `<button class="power ${on ? "on" : ""}" data-act="toggle" data-entity="${ctrl.entity_id}"
+      role="switch" aria-checked="${on}" title="${this._t(on ? "keep_warm_on" : "keep_warm_off")}"
+      aria-label="${this._t("keep_warm")}"><ha-icon icon="mdi:${on ? "fire" : "fire-off"}"></ha-icon></button>`;
+  }
+
+  _levelBar(level) {
+    if (!this._shows("level") || level == null) return "";
+    return `<div class="bar" role="progressbar" aria-label="${this._t("level")}" aria-valuenow="${Math.round(level)}"
+      aria-valuemin="0" aria-valuemax="100"><div style="width:${Math.max(0, Math.min(100, level))}%"></div></div>`;
+  }
+
+  // ---- row (mode: row) ------------------------------------------------------
+  // One tile-sized card per mug in use; asleep mugs are left out, so with all
+  // asleep the card takes no room.
+  _renderTiles(devices) {
+    const awake = devices.filter((d) => this._awake(d));
+    this._lastCount = awake.length;
+    this.toggleAttribute("hidden", !awake.length);
+    const err = this._error ? `<div class="msg" role="alert">${esc(this._error)}</div>` : "";
+    this.shadowRoot.innerHTML = `<style>${this._css()}</style>
+      <div class="tiles">${awake.map((d) => this._renderTile(d)).join("")}${err}</div>`;
+  }
+
+  _renderTile(dev) {
+    const state = this._st(dev, "state")?.state;
+    const curSt = this._st(dev, "current_temp");
+    const temp = this._num(curSt);
+    const level = this._num(this._st(dev, "liquid_level"));
+    const { v: batVal, charging } = this._battery(dev);
+    const ctrl = this._st(dev, "temperature_control");
+    const lim = this._limits(dev);
+    const target = this._target(dev);
+    const unit = curSt?.attributes?.unit_of_measurement || lim.unit;
+    const statusText = state ? this._t(`st_${state}`) : this._t("st_unknown");
+    const batState = this._shows("battery") ? this._batState(batVal, charging) : "";
+
+    // "58 °C → 57 °C · Perfekt"; empty or no reading: just the state
+    let line = `<span style="color:${STATE_COLOR[state] || "inherit"}">${esc(statusText)}</span>`;
+    if (state !== "empty" && temp != null) {
+      const now = this._fmtTemp(temp, unit);
+      const goal = ctrl?.state === "on" && target != null ? this._fmtTemp(target, lim.unit) : now;
+      line = `<span class="t-temp">${now}${goal !== now ? ` → ${goal}` : ""}</span> · ${line}`;
+    }
+    const main = dev.e.current_temp || dev.e.state;
+    return `
+      <ha-card class="tile" data-tap="${main}" role="button" tabindex="0" aria-label="${esc(dev.name)}"><div class="t-in">
+        <div class="t-icon">${this._pic(dev, level, this._ledColor(dev), false, batState)}</div>
+        <div class="text">
+          <div class="r-name">${esc(dev.name)}</div>
+          <div class="sub t-line">${line}</div>
+          ${state !== "empty" ? this._levelBar(level) : ""}
+        </div>
+        ${this._powerBtn(ctrl)}
+      </div></ha-card>`;
   }
 
   _mugSvg(dev, level, rgb) {
@@ -777,6 +892,28 @@ class EmberCard extends HTMLElement {
         .status { font-size: 18px; }
       }
       @media (prefers-reduced-motion: reduce) { .liquid, .bar div { transition: none; } }
+
+      /* row: tile-sized, one per mug in use */
+      :host([hidden]) { display: none; }
+      .tiles { display: flex; flex-direction: column; gap: 8px; }
+      ha-card.tile { padding: 0; cursor: pointer; overflow: hidden; }
+      .t-in { box-sizing: border-box; height: 56px; padding: 0 10px; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
+        column-gap: 10px; align-items: center; }
+      ha-card.tile:hover { background: color-mix(in srgb, var(--primary-text-color) 4%, var(--card-background-color)); }
+      ha-card.tile:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+      .t-icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+        background: color-mix(in srgb, var(--accent-color, var(--primary-color)) 18%, transparent); }
+      .t-icon .pic { width: 26px; }
+      .t-icon .icon { --mdc-icon-size: 22px; color: var(--accent-color, var(--primary-color)); }
+      .t-icon .inner { fill: var(--card-background-color); }
+      .t-icon .badge { width: 16px; height: 16px; top: -9px; right: -11px; box-shadow: 0 0 0 2px var(--card-background-color); }
+      .t-icon .badge ha-icon { --mdc-icon-size: 11px; }
+      .t-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+      .t-temp { color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+      .tile .bar { margin-top: 4px; height: 3px; border-radius: 2px; }
+      .tile .power { width: 36px; height: 36px; }
+      .tile .power ha-icon { --mdc-icon-size: 20px; }
+      .tiles .msg { margin: 0 4px; }
     `;
   }
 }
