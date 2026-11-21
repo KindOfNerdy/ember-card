@@ -6,7 +6,7 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.2.2";
 const PLATFORM = "ember_mug";
 const MODES = ["full", "row"];
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
@@ -914,7 +914,9 @@ class EmberCard extends HTMLElement {
       .tile .bar { margin-top: 4px; height: 3px; border-radius: 2px; }
       .tile .power { width: 48px; height: 36px; border: 0; border-radius: 12px; color: var(--primary-text-color);
         background: color-mix(in srgb, var(--primary-text-color) 6%, transparent); }
-      .tile .power.on { color: var(--primary-color); background: color-mix(in srgb, var(--primary-color) 20%, transparent); }
+      /* on = keeping warm: the theme's heat colour, so it reads at a glance like an active light next to it */
+      .tile .power.on { color: var(--state-climate-heat-color, var(--orange-color));
+        background: color-mix(in srgb, var(--state-climate-heat-color, var(--orange-color)) 20%, transparent); }
       .tile .power:focus-visible { outline-offset: 2px; }
       .tile .power ha-icon { --mdc-icon-size: 20px; }
       .tiles .msg { margin: 0 4px; }
