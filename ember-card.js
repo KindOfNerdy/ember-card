@@ -6,7 +6,7 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.2.1";
 const PLATFORM = "ember_mug";
 const MODES = ["full", "row"];
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
@@ -901,17 +901,21 @@ class EmberCard extends HTMLElement {
         column-gap: 10px; align-items: center; }
       ha-card.tile:hover { background: color-mix(in srgb, var(--primary-text-color) 4%, var(--card-background-color)); }
       ha-card.tile:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
-      .t-icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
-        background: color-mix(in srgb, var(--accent-color, var(--primary-color)) 18%, transparent); }
-      .t-icon .pic { width: 26px; }
-      .t-icon .icon { --mdc-icon-size: 22px; color: var(--accent-color, var(--primary-color)); }
-      .t-icon .inner { fill: var(--card-background-color); }
-      .t-icon .badge { width: 16px; height: 16px; top: -9px; right: -11px; box-shadow: 0 0 0 2px var(--card-background-color); }
+      /* like the tiles around it: the icon stands free, the button is a rounded square */
+      .t-icon { width: 40px; height: 40px; display: grid; place-items: center; }
+      .t-icon .pic { width: 32px; }
+      .t-icon .icon { --mdc-icon-size: 24px; color: var(--accent-color, var(--primary-color)); }
+      .t-icon .inner { fill: var(--secondary-background-color); }
+      .t-icon .badge { width: 16px; height: 16px; top: -6px; right: -7px; box-shadow: 0 0 0 2px var(--card-background-color); }
       .t-icon .badge ha-icon { --mdc-icon-size: 11px; }
-      .t-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+      .tile .r-name { line-height: 20px; }
+      .t-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; }
       .t-temp { color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
       .tile .bar { margin-top: 4px; height: 3px; border-radius: 2px; }
-      .tile .power { width: 36px; height: 36px; }
+      .tile .power { width: 48px; height: 36px; border: 0; border-radius: 12px; color: var(--primary-text-color);
+        background: color-mix(in srgb, var(--primary-text-color) 6%, transparent); }
+      .tile .power.on { color: var(--primary-color); background: color-mix(in srgb, var(--primary-color) 20%, transparent); }
+      .tile .power:focus-visible { outline-offset: 2px; }
       .tile .power ha-icon { --mdc-icon-size: 20px; }
       .tiles .msg { margin: 0 4px; }
     `;
