@@ -6,7 +6,7 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.2.2";
+const CARD_VERSION = "0.2.3";
 const PLATFORM = "ember_mug";
 const MODES = ["full", "row"];
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
