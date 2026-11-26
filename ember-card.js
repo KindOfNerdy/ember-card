@@ -6,7 +6,7 @@
  * from the Home Assistant theme.
  */
 
-const CARD_VERSION = "0.2.3";
+const CARD_VERSION = "0.2.4";
 const PLATFORM = "ember_mug";
 const MODES = ["full", "row"];
 const PARTS = ["picture", "level", "keep_warm", "target", "presets", "battery", "led"];
@@ -534,7 +534,7 @@ class EmberCard extends HTMLElement {
 
     let body = "";
     if (!devices.length) body = `<div class="note">${this._t("no_device")}</div>`;
-    if (active.length) body += `<div class="list cols-${this._config.max_columns}">${active.map((d) => this._renderAwake(d)).join("")}</div>`;
+    if (active.length) body += `<div class="list cols-${esc(this._config.max_columns)}">${active.map((d) => this._renderAwake(d)).join("")}</div>`;
     if (resting.length) body += `<div class="rest">${resting.map((d) => this._renderRow(d)).join("")}</div>`;
 
     const title = this._config.title ? `<div class="title">${esc(this._config.title)}</div>` : "";
@@ -603,7 +603,7 @@ class EmberCard extends HTMLElement {
         const { st: bat, v, charging } = this._battery(dev);
         if (bat && v != null) {
           const bs = this._batState(v, charging);
-          battery = `<button class="bat bat-${bs}" data-act="more" data-entity="${bat.entity_id}" aria-label="${this._t(charging ? "charging" : "battery")}: ${Math.round(v)} %">
+          battery = `<button class="bat bat-${bs}" data-act="more" data-entity="${esc(bat.entity_id)}" aria-label="${this._t(charging ? "charging" : "battery")}: ${Math.round(v)} %">
             <span class="bat-v"><ha-icon icon="${this._batIcon(v, charging)}"></ha-icon>${Math.round(v)} %</span>
             </button>`;
         }
@@ -674,7 +674,7 @@ class EmberCard extends HTMLElement {
     const pre = this._st(dev, "temperature_preset");
     const presetSel =
       ctrlOn && this._shows("presets") && pre?.attributes?.options?.length
-        ? `<select data-act="preset" data-entity="${pre.entity_id}" aria-label="${this._t("preset")}">
+        ? `<select data-act="preset" data-entity="${esc(pre.entity_id)}" aria-label="${this._t("preset")}">
             ${OFF.includes(pre.state) ? `<option value="" selected>${this._t("preset_none")}</option>` : ""}
             ${pre.attributes.options
               .map((o) => {
@@ -687,10 +687,10 @@ class EmberCard extends HTMLElement {
     const stepper =
       ctrlOn && this._shows("target") && dev.e.target_temp
         ? `<div class="stepper">
-            <button data-act="step" data-dev="${dev.id}" data-dir="-1" ${target == null || target <= lim.min ? "disabled" : ""}
+            <button data-act="step" data-dev="${esc(dev.id)}" data-dir="-1" ${target == null || target <= lim.min ? "disabled" : ""}
               aria-label="${this._t("lower")}"><ha-icon icon="mdi:minus"></ha-icon></button>
-            <span class="val ${pending ? "pending" : ""}" aria-live="polite">${this._fmtTemp(target, lim.unit)}</span>
-            <button data-act="step" data-dev="${dev.id}" data-dir="1" ${target == null || target >= lim.max ? "disabled" : ""}
+            <span class="val ${pending ? "pending" : ""}" aria-live="polite">${esc(this._fmtTemp(target, lim.unit))}</span>
+            <button data-act="step" data-dev="${esc(dev.id)}" data-dir="1" ${target == null || target >= lim.max ? "disabled" : ""}
               aria-label="${this._t("raise")}"><ha-icon icon="mdi:plus"></ha-icon></button>
           </div>`
         : "";
@@ -699,7 +699,7 @@ class EmberCard extends HTMLElement {
     // small things: battery and LED color
     const battery =
       bat && this._shows("battery")
-        ? `<button class="btn small bat-${batState}" data-act="more" data-entity="${bat.entity_id}"
+        ? `<button class="btn small bat-${batState}" data-act="more" data-entity="${esc(bat.entity_id)}"
              aria-label="${this._t(charging ? "charging" : "battery")}: ${batVal == null ? "–" : Math.round(batVal)} %">
              <ha-icon icon="${this._batIcon(batVal, charging)}"></ha-icon>${
                batVal == null ? "–" : `${Math.round(batVal)} %`
@@ -708,8 +708,8 @@ class EmberCard extends HTMLElement {
     const ledPick =
       led && this._shows("led") && !OFF.includes(led.state)
         ? `<label class="btn small" title="${this._t("led_color")}">
-             <span class="swatch" style="background:${rgb ? `rgb(${rgb.join(",")})` : "var(--disabled-color)"}"></span>${this._t("led")}
-             <input type="color" data-act="led" data-dev="${dev.id}" data-entity="${led.entity_id}"
+             <span class="swatch" style="background:${rgb ? toHex(rgb) : "var(--disabled-color)"}"></span>${this._t("led")}
+             <input type="color" data-act="led" data-dev="${esc(dev.id)}" data-entity="${esc(led.entity_id)}"
                value="${rgb ? toHex(rgb) : "#ffffff"}" aria-label="${this._t("led_color")}">
            </label>`
         : "";
@@ -722,7 +722,7 @@ class EmberCard extends HTMLElement {
   _powerBtn(ctrl) {
     if (!ctrl || !this._shows("keep_warm")) return "";
     const on = ctrl.state === "on";
-    return `<button class="power ${on ? "on" : ""}" data-act="toggle" data-entity="${ctrl.entity_id}"
+    return `<button class="power ${on ? "on" : ""}" data-act="toggle" data-entity="${esc(ctrl.entity_id)}"
       role="switch" aria-checked="${on}" title="${this._t(on ? "keep_warm_on" : "keep_warm_off")}"
       aria-label="${this._t("keep_warm")}"><ha-icon icon="mdi:${on ? "fire" : "fire-off"}"></ha-icon></button>`;
   }
@@ -763,11 +763,11 @@ class EmberCard extends HTMLElement {
     if (state !== "empty" && temp != null) {
       const now = this._fmtTemp(temp, unit);
       const goal = ctrl?.state === "on" && target != null ? this._fmtTemp(target, lim.unit) : now;
-      line = `<span class="t-temp">${now}${goal !== now ? ` → ${goal}` : ""}</span> · ${line}`;
+      line = `<span class="t-temp">${esc(now)}${goal !== now ? ` → ${esc(goal)}` : ""}</span> · ${line}`;
     }
     const main = dev.e.current_temp || dev.e.state;
     return `
-      <ha-card class="tile" data-tap="${main}" role="button" tabindex="0" aria-label="${esc(dev.name)}"><div class="t-in">
+      <ha-card class="tile" data-tap="${esc(main)}" role="button" tabindex="0" aria-label="${esc(dev.name)}"><div class="t-in">
         <div class="t-icon">${this._pic(dev, level, this._ledColor(dev), false, batState)}</div>
         <div class="text">
           <div class="r-name">${esc(dev.name)}</div>
@@ -783,7 +783,7 @@ class EmberCard extends HTMLElement {
     const id = `m${dev.id.replace(/[^a-z0-9]/gi, "")}`;
     const lvl = Math.max(0, Math.min(100, level ?? 0));
     const y = s.bottom - ((s.bottom - s.top) * lvl) / 100;
-    const glow = rgb ? `rgb(${rgb.join(",")})` : "var(--divider-color)";
+    const glow = rgb ? toHex(rgb) : "var(--divider-color)";
     return `
       <svg viewBox="0 0 100 100" aria-hidden="true">
         <defs><clipPath id="${id}c"><path d="${s.inner}"/></clipPath></defs>
